@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QMessageBox,
 )
 from PySide6.QtWidgets import QGraphicsDropShadowEffect
 
@@ -516,6 +517,13 @@ class LauncherWindow(QMainWindow):
         )
         self.launch_button.clicked.connect(self.launch_selected)
         actions.addWidget(self.launch_button)
+
+        self.uninstall_button = QPushButton("Sil")
+        self.uninstall_button.setStyleSheet(
+            button_style("#dc2626", "#b91c1c", text="#fee2e2", radius=14, padding="10px 14px", weight=600)
+        )
+        self.uninstall_button.clicked.connect(self.handle_uninstall)
+        actions.addWidget(self.uninstall_button)
         right_layout.addLayout(actions)
 
         quick = QHBoxLayout()
@@ -609,6 +617,7 @@ class LauncherWindow(QMainWindow):
         self.detail_desc.setText(program.description)
         self.detail_pill.setText(program.category.upper())
         self.launch_button.setEnabled(program.id in self.installed)
+        self.uninstall_button.setEnabled(program.id in self.installed)
         self.detail_status_update()
 
     def set_view_mode(self, mode: str) -> None:
@@ -650,6 +659,43 @@ class LauncherWindow(QMainWindow):
         self.worker.failed.connect(self.on_failed)
         self.install_button.setEnabled(False)
         self.worker.start()
+
+    def handle_uninstall(self) -> None:
+        if not self.selected_program:
+            return
+        installed = self.installed.get(self.selected_program.id)
+        if not installed:
+            return
+        confirm = QMessageBox.question(
+            self,
+            "Kaldir",
+            f"{self.selected_program.name} kaldirilsin mi?",
+            QMessageBox.Yes | QMessageBox.No,
+        )
+        if confirm != QMessageBox.Yes:
+            return
+        program = self.selected_program
+        self.progress_label.setText("Kaldiriliyor...")
+        self.log(f"Kaldiriliyor: {program.name}")
+        try:
+            kill_process(program.exe_name)
+            exe_path = installed.get("exe_path")
+            install_dir = os.path.dirname(exe_path) if exe_path else os.path.join(INSTALL_ROOT, program.id)
+            if os.path.exists(install_dir):
+                shutil.rmtree(install_dir, ignore_errors=True)
+            remove_shortcut(program.name)
+            self.installed.pop(program.id, None)
+            save_installed(self.installed)
+            card = self.cards.get(program.id)
+            if card:
+                card.set_status(self.get_status(program))
+            self.detail_status_update()
+            self.launch_button.setEnabled(False)
+            self.uninstall_button.setEnabled(False)
+            self.progress_label.setText("Kaldirildi.")
+        except Exception as exc:  # noqa: BLE001
+            self.progress_label.setText("Kaldirma basarisiz.")
+            self.log(f"Kaldirma hatasi: {exc}")
 
     def on_status(self, text: str) -> None:
         self.progress_label.setText(text)
@@ -876,6 +922,18 @@ def create_shortcut(target_path: str, shortcut_name: str) -> None:
         "$Shortcut.Save();"
     )
     subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True)
+
+
+def remove_shortcut(shortcut_name: str) -> None:
+    desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+    if not os.path.exists(desktop):
+        return
+    lnk_path = os.path.join(desktop, f"{shortcut_name}.lnk")
+    try:
+        if os.path.exists(lnk_path):
+            os.remove(lnk_path)
+    except OSError:
+        pass
 
 
 def main() -> None:
